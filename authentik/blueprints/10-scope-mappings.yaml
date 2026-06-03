@@ -1,0 +1,53 @@
+version: 1
+# =============================================================================
+# Blueprint: Custom scope mappings for the PoC SPA/API provider.
+#
+# Declares two NEW scope mappings:
+#   - scope "groups"  → injects groups claim derived from email (CONTRACT §4.3)
+#   - scope "api"     → injects aud=poc-api into the access token (CONTRACT §5)
+#
+# The built-in openid / email / profile scope mappings ship with authentik and
+# are referenced by managed ID in 20-provider.yaml via !Find; we do NOT
+# redeclare them here.
+#
+# Numbered 10-* so it applies before the provider blueprint (20-*) that
+# references these mappings by !KeyOf.
+#
+# LOCAL/DEMO ONLY.
+# =============================================================================
+metadata:
+  name: PoC - Custom scope mappings
+
+entries:
+
+  # ---------------------------------------------------------------------------
+  # groups scope mapping
+  # Returns ["admins"] for alice, ["users"] for everyone else.
+  # CONTRACT §4.3, §5: groups claim shape is a list of strings.
+  # ---------------------------------------------------------------------------
+  - model: authentik_providers_oauth2.scopemapping
+    identifiers:
+      managed: "goauthentik.io/providers/oauth2/poc-scope-groups"
+    id: scope-groups
+    attrs:
+      name: "PoC - groups scope"
+      scope_name: "groups"
+      description: "Group membership derived from email (PoC demo logic)"
+      expression: |
+        return {"groups": ["admins"] if request.user.email == "alice@example.com" else ["users"]}
+
+  # ---------------------------------------------------------------------------
+  # api scope mapping
+  # Injects aud=poc-api into the access token so the Go API can validate
+  # the audience claim (CONTRACT §5, §6).
+  # ---------------------------------------------------------------------------
+  - model: authentik_providers_oauth2.scopemapping
+    identifiers:
+      managed: "goauthentik.io/providers/oauth2/poc-scope-api"
+    id: scope-api
+    attrs:
+      name: "PoC - api audience scope"
+      scope_name: "api"
+      description: "Injects poc-api into access token aud (CONTRACT §5)"
+      expression: |
+        return {"aud": "poc-api"}

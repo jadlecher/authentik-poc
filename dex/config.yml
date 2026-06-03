@@ -1,0 +1,89 @@
+# =============================================================================
+# Dex — Static OIDC IdP configuration
+# =============================================================================
+# CONTRACT §3 requirements implemented here.
+#
+# STORAGE NOTE (tradeoff documented):
+#   We use `sqlite3` at /var/dex/dex.db so the database survives container
+#   restarts but is wiped on `docker compose down -v` (because the dex-data
+#   volume is removed). For a PoC this is the best balance: no state loss on
+#   accidental restart, clean slate on `down -v`. Memory storage would be
+#   simpler but loses all sessions on any restart. sqlite3 is acceptable.
+#
+# SECRETS NOTE:
+#   Dex config supports $VAR expansion (via `--config` flag reads env vars).
+#   The client secret is read from DEX_CLIENT_SECRET env var at runtime.
+#   The issuer, passwords, and other non-secret values are inlined.
+#   LOCAL/DEMO ONLY — see CONTRACT §3.
+#
+# APPROVAL SCREEN NOTE:
+#   skipApprovalScreen: true is set for smooth PoC UX. In production, set
+#   to false to show the OAuth consent/approval screen to users.
+# =============================================================================
+
+# CONTRACT §3: issuer MUST be this exact string (Dex serves under /dex path).
+issuer: http://idp.localhost:8000/dex
+
+# ---------------------------------------------------------------------------
+# Storage — sqlite3 (survives restart, wiped on `down -v`)
+# ---------------------------------------------------------------------------
+storage:
+  type: sqlite3
+  config:
+    file: /var/dex/dex.db
+
+# ---------------------------------------------------------------------------
+# Web server — listens on 0.0.0.0:5556 (CONTRACT §3)
+# ---------------------------------------------------------------------------
+web:
+  http: 0.0.0.0:5556
+
+# ---------------------------------------------------------------------------
+# OAuth2 settings
+# ---------------------------------------------------------------------------
+oauth2:
+  # Skip the "Grant Access" approval screen for smooth PoC UX.
+  # Set to false in production to show the consent screen.
+  skipApprovalScreen: true
+
+# ---------------------------------------------------------------------------
+# Enable static password database (CONTRACT §3)
+# ---------------------------------------------------------------------------
+enablePasswordDB: true
+
+# ---------------------------------------------------------------------------
+# Static OIDC client — authentik (CONTRACT §3, exact values required)
+# client_id:     authentik
+# client_secret: read from DEX_CLIENT_SECRET env var (LOCAL/DEMO ONLY)
+# redirect_uri:  authentik OAuth-source callback; source slug = dex
+# ---------------------------------------------------------------------------
+staticClients:
+  - id: authentik
+    # SECRET NOTE: read from env var for slightly better hygiene even in PoC.
+    # Value is authentik-dex-secret-LOCAL-DEMO-ONLY (see .env / CONTRACT §3).
+    secret: $DEX_CLIENT_SECRET
+    name: "authentik"
+    redirectURIs:
+      - "http://auth.localhost:8000/source/oauth/callback/dex/"
+
+# ---------------------------------------------------------------------------
+# Static passwords — two demo users (CONTRACT §3)
+#
+# Bcrypt hashes generated with rounds=10 for password "password".
+# Verified: bcrypt.checkpw(b'password', hash) == True for both users.
+# Generation method: docker run python:3.12-alpine + bcrypt pip package.
+#
+# userIDs are stable UUIDs (hardcoded so sub claims are predictable).
+# ---------------------------------------------------------------------------
+staticPasswords:
+  - email: "alice@example.com"
+    # password: password (LOCAL/DEMO ONLY)
+    hash: "$2b$10$52.2MpmjCLumvAKBI2beO.9QNYuG6Ww2DPfzafH2lhFBhQ8UT0TnG"
+    username: "alice"
+    userID: "08a8684b-db88-4b73-90a9-3cd1661f5466"
+
+  - email: "bob@example.com"
+    # password: password (LOCAL/DEMO ONLY)
+    hash: "$2b$10$1AxwUHiWaVJe94nijCGk6.qRw8W2e6gm2TOtliRpoTY8NHXzB8scW"
+    username: "bob"
+    userID: "14f85f05-73b4-47a3-ba2f-6aba3c3b5d77"

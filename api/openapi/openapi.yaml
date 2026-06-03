@@ -1,0 +1,228 @@
+openapi: "3.1.0"
+info:
+  title: authentik-poc API
+  version: "1.0.0"
+  description: |
+    Go REST API for the authentik Identity-Broker PoC.
+    All paths are served under /api/... directly (Traefik does NOT strip the prefix).
+    All protected operations require a valid JWT Bearer token issued by authentik
+    (iss=http://auth.localhost:8000/application/o/app/, aud contains poc-api, RS256).
+
+    CORS: Not needed — SPA and API share the same origin (app.localhost:8000).
+
+servers:
+  - url: http://app.localhost:8000
+    description: Local dev (via Traefik)
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        JWT access token issued by authentik.
+        Must have iss=http://auth.localhost:8000/application/o/app/,
+        aud containing poc-api, RS256 signature.
+
+  schemas:
+    User:
+      type: object
+      required: [sub, email, name, groups]
+      properties:
+        sub:
+          type: string
+          description: Stable opaque user identifier from the JWT sub claim.
+          example: "abc123"
+        email:
+          type: string
+          format: email
+          description: User email from JWT email claim.
+          example: "alice@example.com"
+        name:
+          type: string
+          description: Display name from JWT name claim.
+          example: "Alice"
+        groups:
+          type: array
+          items:
+            type: string
+          description: Groups from JWT groups claim (e.g. ["admins"] or ["users"]).
+          example: ["admins"]
+        is_admin:
+          type: boolean
+          description: True if the user is in the admins group.
+          example: true
+
+    Todo:
+      type: object
+      required: [id, title, done, owner]
+      properties:
+        id:
+          type: string
+          description: Unique todo identifier (UUID).
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        title:
+          type: string
+          description: The todo item text.
+          example: "Buy groceries"
+        done:
+          type: boolean
+          description: Completion status.
+          example: false
+        owner:
+          type: string
+          description: The sub (user ID) who owns this todo.
+          example: "abc123"
+
+    CreateTodoRequest:
+      type: object
+      required: [title]
+      properties:
+        title:
+          type: string
+          minLength: 1
+          description: The todo item text.
+          example: "Buy groceries"
+        done:
+          type: boolean
+          default: false
+          description: Initial completion status (defaults to false).
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: Human-readable error description. Never includes token content.
+          example: "unauthorized"
+
+# Security applied globally; can be overridden per-operation with [] to clear.
+security:
+  - bearerAuth: []
+
+paths:
+  /api/me:
+    get:
+      operationId: getMe
+      summary: Get authenticated user profile
+      description: |
+        Returns the profile of the currently authenticated user, derived from
+        the validated JWT claims (sub, email, name, groups). Also includes
+        is_admin=true when the groups claim contains "admins".
+      tags: [user]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Authenticated user profile.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          description: Missing, malformed, expired, wrong-issuer, or wrong-audience token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/todos:
+    get:
+      operationId: listTodos
+      summary: List todos for the authenticated user
+      description: |
+        Returns all todos owned by the authenticated user (scoped by JWT sub claim).
+        Todos are stored in-memory and are NOT persisted across restarts.
+      tags: [todos]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: List of todos for this user (may be empty).
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Todo"
+        "401":
+          description: Invalid or missing token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+    post:
+      operationId: createTodo
+      summary: Create a new todo
+      description: |
+        Creates a new todo for the authenticated user. The owner is set to the
+        JWT sub claim — the caller cannot spoof ownership.
+      tags: [todos]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTodoRequest"
+      responses:
+        "201":
+          description: The created todo.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Todo"
+        "400":
+          description: Invalid request body.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Invalid or missing token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/todos/{id}:
+    get:
+      operationId: getTodo
+      summary: Get a single todo by ID
+      description: |
+        Returns the specified todo if it exists and is owned by the authenticated
+        user. Returns 404 if the todo does not exist OR belongs to another user
+        (ownership is not leaked).
+      tags: [todos]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The todo ID (UUID).
+      responses:
+        "200":
+          description: The requested todo.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Todo"
+        "401":
+          description: Invalid or missing token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Todo not found or not owned by the authenticated user.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"

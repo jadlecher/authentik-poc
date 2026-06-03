@@ -1,0 +1,102 @@
+# =============================================================================
+# Taskfile.yml — go-task v3
+# =============================================================================
+# Stubs only in Phase 0. Later workers will flesh out the real implementations.
+# Run tasks with: task <name>
+# Install go-task: https://taskfile.dev/installation/
+# =============================================================================
+
+version: "3"
+
+vars:
+  COMPOSE: docker compose
+
+tasks:
+
+  # ---------------------------------------------------------------------------
+  # dev — bring up the full stack
+  # ---------------------------------------------------------------------------
+  # TODO (Phase 3 — workflow worker): implement fully:
+  #   - Run codegen (ogen for API, openapi-typescript for SPA)
+  #   - Build images
+  #   - docker compose up -d
+  #   - Wait for health checks
+  #   - Print URLs and demo credentials
+  # ---------------------------------------------------------------------------
+  dev:
+    desc: "Bring up the full stack (build, codegen, compose up, wait for health)"
+    cmds:
+      - echo "⚠  'task dev' is not yet fully implemented (Phase 0 stub)."
+      - echo "   To bring up what's available: docker compose up -d"
+      - echo ""
+      - echo "   URLs (once fully implemented):"
+      - echo "     http://app.localhost:8000/      → SPA"
+      - echo "     http://app.localhost:8000/api/  → Go API"
+      - echo "     http://auth.localhost:8000/     → authentik"
+      - echo "     http://idp.localhost:8000/      → Dex"
+      - echo "     http://traefik.localhost:8000/  → Traefik dashboard"
+      - echo ""
+      - echo "   Demo users: alice@example.com / password  (admin)"
+      - echo "               bob@example.com   / password  (user)"
+
+  # ---------------------------------------------------------------------------
+  # dev:clean — tear down everything
+  # ---------------------------------------------------------------------------
+  # Real implementation: volumes and orphans removed, idempotent.
+  # ---------------------------------------------------------------------------
+  dev:clean:
+    desc: "Tear down the full stack (volumes, orphans removed)"
+    cmds:
+      - "{{.COMPOSE}} down -v --remove-orphans"
+
+  # ---------------------------------------------------------------------------
+  # validate — run all infra + API + E2E checks
+  # ---------------------------------------------------------------------------
+  # TODO (Phase 4 — validation worker): implement:
+  #   - Verify only traefik publishes host ports
+  #   - Verify hostname routing (curl checks)
+  #   - API neg/pos tests
+  #   - Playwright E2E browser flow
+  # ---------------------------------------------------------------------------
+  validate:
+    desc: "Run infra checks, API neg/pos tests, and Playwright E2E (not yet implemented)"
+    cmds:
+      - echo "⚠  'task validate' is not yet implemented (Phase 0 stub)."
+
+  # ---------------------------------------------------------------------------
+  # logs — tail all compose service logs
+  # ---------------------------------------------------------------------------
+  logs:
+    desc: "Follow logs for all compose services"
+    cmds:
+      - "{{.COMPOSE}} logs -f"
+
+  # ---------------------------------------------------------------------------
+  # test — run unit/integration tests
+  # ---------------------------------------------------------------------------
+  # Phase 2a: runs Go API tests (no browser needed; local OIDC mock).
+  # ---------------------------------------------------------------------------
+  test:
+    desc: "Run unit and integration tests for the Go API"
+    cmds:
+      - cd api && go test ./...
+
+  # ---------------------------------------------------------------------------
+  # api:generate — regenerate ogen code from the OpenAPI spec
+  # ---------------------------------------------------------------------------
+  # Run this after editing api/openapi/openapi.yaml.
+  # ---------------------------------------------------------------------------
+  api:generate:
+    desc: "Regenerate ogen code from api/openapi/openapi.yaml"
+    cmds:
+      - cd api && go run github.com/ogen-go/ogen/cmd/ogen --target ./internal/oapi --package oapi --clean ./openapi/openapi.yaml
+
+  # ---------------------------------------------------------------------------
+  # test:e2e — run Playwright E2E tests only
+  # ---------------------------------------------------------------------------
+  # TODO (Phase 4): run playwright tests in tests/
+  # ---------------------------------------------------------------------------
+  test:e2e:
+    desc: "Run Playwright end-to-end tests (not yet implemented)"
+    cmds:
+      - echo "⚠  'task test:e2e' is not yet implemented (Phase 0 stub)."

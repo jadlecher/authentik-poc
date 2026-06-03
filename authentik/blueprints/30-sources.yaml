@@ -1,0 +1,61 @@
+version: 1
+# =============================================================================
+# Blueprint: Dex OAuth Source (CONTRACT §4.1)
+#
+# Declares the "dex" OAuth source so authentik can broker login to the
+# upstream Dex IdP. authentik will auto-create/update Dex users on first login.
+#
+# provider_type: openidconnect (authentik's generic OIDC source type)
+# oidc_well_known_url: Dex discovery endpoint (resolves via Traefik aliases
+#   because the poc network has auth.localhost, idp.localhost as Traefik
+#   network aliases — see CONTRACT §1 and GATE 3 resolution notes).
+#
+# Enrollment / authentication flows: authentik defaults so brokered Dex users
+# are created automatically on first login (CONTRACT §4.1).
+#
+# Numbered 30-* (after provider; source is independent but ordered last
+# as it triggers a network fetch to Dex at apply time).
+#
+# LOCAL/DEMO ONLY.
+# =============================================================================
+metadata:
+  name: PoC - Dex OAuth Source
+
+entries:
+
+  # ---------------------------------------------------------------------------
+  # OAuth Source — dex
+  # CONTRACT §4.1:
+  #   slug: dex
+  #   provider_type: openidconnect
+  #   consumer_key: authentik  (= Dex client_id)
+  #   consumer_secret: authentik-dex-secret-LOCAL-DEMO-ONLY
+  #   oidc_well_known_url: http://idp.localhost:8000/dex/.well-known/openid-configuration
+  #   scopes: openid profile email
+  #   authentication_flow: default-source-authentication
+  #   enrollment_flow: default-source-enrollment
+  # ---------------------------------------------------------------------------
+  - model: authentik_sources_oauth.oauthsource
+    identifiers:
+      slug: dex
+    id: source-dex
+    attrs:
+      name: "Dex"
+      slug: "dex"
+      enabled: true
+      provider_type: "openidconnect"
+      consumer_key: "authentik"
+      consumer_secret: "authentik-dex-secret-LOCAL-DEMO-ONLY"
+      # Dex OIDC discovery — resolves via Traefik network alias on poc network.
+      # authentik-worker fetches this when the source is configured.
+      # GATE 3 ensures this resolves correctly from inside the container.
+      oidc_well_known_url: "http://idp.localhost:8000/dex/.well-known/openid-configuration"
+      # Additional scopes to request from Dex beyond the openid default.
+      additional_scopes: "profile email"
+      # Flows for brokered users — use authentik defaults (auto-created on boot)
+      authentication_flow: !Find [authentik_flows.flow, [slug, "default-source-authentication"]]
+      enrollment_flow: !Find [authentik_flows.flow, [slug, "default-source-enrollment"]]
+      # user_matching_mode: email_link → link existing users by email address
+      # (important: if akadmin has a matching email it would link; our demo
+      # users are alice@example.com and bob@example.com which are distinct)
+      user_matching_mode: "email_link"

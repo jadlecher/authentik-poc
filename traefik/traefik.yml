@@ -1,0 +1,48 @@
+# =============================================================================
+# Traefik v3 — Static Configuration
+# =============================================================================
+# CONTRACT §0: single entrypoint "web" on :8000, published 8000:8000.
+# No TLS. HTTP only. Local PoC only.
+# =============================================================================
+
+# --- Entrypoints -------------------------------------------------------------
+entryPoints:
+  web:
+    address: ":8000"
+    # 8443 reserved but unused per CONTRACT §0
+    # forwardedHeaders: configure trusted proxies that can set X-Forwarded-*
+    # (not needed here — we are the outermost proxy)
+  # traefik-internal is disabled; dashboard routed via labels instead
+
+# --- API / Dashboard ---------------------------------------------------------
+# api.insecure=false per CONTRACT §2 — dashboard access gated by a router label
+# on the traefik service itself (see docker-compose.yml).
+api:
+  dashboard: true
+  insecure: false
+
+# --- Providers ---------------------------------------------------------------
+providers:
+  # Docker provider: reads labels off compose services.
+  # exposedByDefault=false: only services with traefik.enable=true are routed.
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    exposedByDefault: false
+    network: poc
+
+  # File provider: used for configuration that cannot live on a container
+  # (e.g. middleware, TLS options, catch-all routers if ever needed).
+  file:
+    directory: /etc/traefik/dynamic
+    watch: true
+
+# --- Logging -----------------------------------------------------------------
+log:
+  level: INFO
+  format: common
+
+accessLog:
+  format: common
+
+# --- Ping (internal health check) -------------------------------------------
+ping: {}

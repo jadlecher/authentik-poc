@@ -1,0 +1,442 @@
+# =============================================================================
+# authentik Identity-Broker PoC — Docker Compose
+# =============================================================================
+# CONTRACT §0 (non-negotiable):
+#   - Traefik is the ONLY service with a host port mapping ("8000:8000").
+#   - Entrypoint "web" listens on container port 8000, published as host 8000.
+#     (NOT 80→8000 — authority string must be identical inside and outside Docker
+#      so JWT issuer/JWKS URLs are byte-for-byte the same from browser and API.)
+#   - All services share the single bridge network "poc".
+#   - Network aliases on traefik let internal callers resolve public hostnames
+#     to Traefik without a port remap.
+#
+# Pinned image versions (update here + README when bumping):
+#   traefik:        v3.3.5  (latest stable Traefik v3 as of 2026-06)
+#   traefik/whoami: v1.10   (throwaway — REMOVED after routing was verified)
+#
+# Placeholder services will be added by later workers:
+#   Phase 1a  → dex
+#   Phase 1b  → authentik-postgresql, authentik-redis,
+#               authentik-server, authentik-worker
+#   Phase 2a  → api
+#   Phase 2b  → spa
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # traefik — ingress / reverse proxy
+  # ---------------------------------------------------------------------------
+  # CONTRACT §1: only traefik has ports:. All other services use labels only.
+  # CONTRACT §2: dashboard at http://traefik.localhost:8000/ (local-only).
+  # ---------------------------------------------------------------------------
+  traefik:
+    image: traefik:v3.3.5
+    restart: unless-stopped
+    command:
+      # Point at our static config file; all other options live in traefik.yml.
+      - "--configFile=/etc/traefik/traefik.yml"
+    ports:
+      # HOST:CONTAINER — must be 8000:8000, NOT 80→8000 (see CONTRACT §0).
+      - "8000:8000"
+    volumes:
+      # Static config
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      # Dynamic config directory (file provider, hot-reloaded)
+      - ./traefik/dynamic:/etc/traefik/dynamic:ro
+      # Docker socket (read-only — Docker provider)
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      poc:
+        # CONTRACT §1: aliases so internal services can call public hostnames
+        # and reach Traefik (same :8000 port, no remap, issuer URLs identical).
+        aliases:
+          - app.localhost
+          - auth.localhost
+          - idp.localhost
+          - traefik.localhost
+    labels:
+      traefik.enable: "true"
+      # Dashboard router — routes traefik.localhost:8000 → Traefik API/dashboard.
+      # api.insecure=false in traefik.yml, so this label-based router is required.
+      # LOCAL-ONLY: do not expose this in any non-local environment.
+      traefik.http.routers.traefik-dashboard.rule: "Host(`traefik.localhost`)"
+      traefik.http.routers.traefik-dashboard.entrypoints: "web"
+      traefik.http.routers.traefik-dashboard.service: "api@internal"
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  # ---------------------------------------------------------------------------
+  # THROWAWAY VERIFICATION SERVICE — whoami
+  # ---------------------------------------------------------------------------
+  # This service was used during Phase 0 scaffolding to prove that:
+  #   1. Traefik routes Host(app.localhost) → correct container via labels.
+  #   2. The poc network aliases resolve correctly from inside Docker.
+  #   3. Only traefik publishes a host port (docker compose ps verified).
+  #
+  # Verified with:
+  #   curl -s -H 'Host: app.localhost' http://localhost:8000/
+  #   docker compose exec traefik wget -qO- http://app.localhost:8000/
+  #   curl -s -H 'Host: traefik.localhost' http://localhost:8000/dashboard/
+  #
+  # The whoami service definition has been REMOVED. The comment block remains
+  # as a record of what was tested. Phase 2b (spa worker) will add the real
+  # `spa` service routed at Host(`app.localhost`).
+  # ---------------------------------------------------------------------------
+
+  # ---------------------------------------------------------------------------
+  # dex — upstream stub enterprise OIDC IdP (Phase 1a)
+  # ---------------------------------------------------------------------------
+  # CONTRACT §3:
+  #   - Issuer: http://idp.localhost:8000/dex  (must be byte-for-byte exact)
+  #   - Served under path /dex (Dex path_prefix config)
+  #   - Container port 5556; NO host port (Traefik routes Host(idp.localhost))
+  #   - Static password DB: alice + bob with bcrypt hashes for "password"
+  #   - Static OIDC client for authentik (see dex/config.yml)
+  #
+  # Image pinned: ghcr.io/dexidp/dex:v2.41.1 (latest stable as of 2026-06)
+  # ---------------------------------------------------------------------------
+  dex:
+    image: ghcr.io/dexidp/dex:v2.41.1
+    restart: unless-stopped
+    command: ["dex", "serve", "/etc/dex/config.yml"]
+    environment:
+      # DEX_CLIENT_SECRET is read by Dex config via $DEX_CLIENT_SECRET expansion.
+      # Value: authentik-dex-secret-LOCAL-DEMO-ONLY (CONTRACT §3 / .env)
+      DEX_CLIENT_SECRET: ${DEX_CLIENT_SECRET}
+    volumes:
+      # Dex config (read-only mount)
+      - ./dex/config.yml:/etc/dex/config.yml:ro
+      # Persistent sqlite3 storage (survives restart; wiped on `down -v`)
+      - dex-data:/var/dex
+    networks:
+      - poc
+    # No ports: — CONTRACT §0: only traefik publishes host ports.
+    labels:
+      traefik.enable: "true"
+      # Route Host(idp.localhost) → this container on port 5556.
+      traefik.http.routers.dex.rule: "Host(`idp.localhost`)"
+      traefik.http.routers.dex.entrypoints: "web"
+      traefik.http.services.dex.loadbalancer.server.port: "5556"
+    healthcheck:
+      # Hit the OIDC discovery endpoint through the container's own port.
+      test:
+        - "CMD"
+        - "wget"
+        - "--quiet"
+        - "--tries=1"
+        - "--spider"
+        - "http://localhost:5556/dex/.well-known/openid-configuration"
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # authentik-postgresql — PostgreSQL 16 database for authentik (Phase 1b)
+  # ---------------------------------------------------------------------------
+  # CONTRACT §4: POSTGRES_DB/USER/PASSWORD from .env; named volume; no host port.
+  # Image pinned: docker.io/library/postgres:16-alpine
+  # ---------------------------------------------------------------------------
+  authentik-postgresql:
+    image: docker.io/library/postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - authentik-postgres-data:/var/lib/postgresql/data
+    networks:
+      - poc
+    # No ports: — CONTRACT §0: only traefik publishes host ports.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # authentik-redis — Redis cache/broker for authentik (Phase 1b)
+  # ---------------------------------------------------------------------------
+  # Image pinned: docker.io/library/redis:7-alpine (stable)
+  # ---------------------------------------------------------------------------
+  authentik-redis:
+    image: docker.io/library/redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    volumes:
+      - authentik-redis-data:/data
+    networks:
+      - poc
+    # No ports: — CONTRACT §0: only traefik publishes host ports.
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  # ---------------------------------------------------------------------------
+  # authentik-server — authentik OIDC broker + UI (Phase 1b)
+  # ---------------------------------------------------------------------------
+  # CONTRACT §4:
+  #   - Routed at Host(auth.localhost) → container port 9000 (authentik HTTP)
+  #   - No host port (Traefik routes)
+  #   - Blueprints mounted at /blueprints/custom (read-only)
+  #   - extra_hosts: maps public hostnames to Traefik (GATE 3 resolution)
+  #
+  # GATE 3 NOTE: glibc inside the container may resolve *.localhost to 127.0.0.1
+  # (bypassing Docker DNS). We use extra_hosts to map auth.localhost,
+  # idp.localhost, and app.localhost to the traefik container's IP on the
+  # poc network. Docker Compose resolves "traefik" to the Traefik container IP.
+  #
+  # DOCKER SOCKET: NOT mounted. This PoC uses no outposts; the socket is only
+  # needed for container-based outpost management (embedded or external outpost
+  # docker provider). Without outposts the socket is unnecessary and a security
+  # risk — omitted per CONTRACT §4 guidance.
+  #
+  # Image pinned: ghcr.io/goauthentik/server:2024.12.3
+  # ---------------------------------------------------------------------------
+  authentik-server:
+    image: ghcr.io/goauthentik/server:2024.12.3
+    restart: unless-stopped
+    command: server
+    environment:
+      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
+      # PostgreSQL connection
+      AUTHENTIK_POSTGRESQL__HOST: authentik-postgresql
+      AUTHENTIK_POSTGRESQL__NAME: ${POSTGRES_DB}
+      AUTHENTIK_POSTGRESQL__USER: ${POSTGRES_USER}
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${POSTGRES_PASSWORD}
+      # Redis connection
+      AUTHENTIK_REDIS__HOST: authentik-redis
+      # Bootstrap admin (break-glass only; CONTRACT §4)
+      AUTHENTIK_BOOTSTRAP_PASSWORD: ${AUTHENTIK_BOOTSTRAP_PASSWORD}
+      AUTHENTIK_BOOTSTRAP_TOKEN: ${AUTHENTIK_BOOTSTRAP_TOKEN}
+      AUTHENTIK_BOOTSTRAP_EMAIL: ${AUTHENTIK_BOOTSTRAP_EMAIL}
+      # Operational flags
+      AUTHENTIK_DISABLE_UPDATE_CHECK: "true"
+      AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
+      # Ensure authentik trusts forwarded headers from Traefik so the issuer
+      # URL uses the public host:port (http://auth.localhost:8000/...) rather
+      # than the internal container host. CONTRACT §0 single-port invariant.
+      AUTHENTIK_LISTEN__TRUSTED_PROXY_CIDRS: "172.16.0.0/12,10.0.0.0/8,192.168.0.0/16"
+      # Override Django settings to use X-Forwarded-Host header for URL building.
+      # The Traefik authentik-headers middleware sets X-Forwarded-Host: auth.localhost:8000
+      # so Django's build_absolute_uri() returns correct issuer URLs with port 8000.
+      # CONTRACT §0: issuer must be http://auth.localhost:8000/application/o/app/
+      DJANGO_SETTINGS_MODULE: "authentik.root.custom_settings"
+    volumes:
+      # Blueprints mounted read-only; worker applies them on boot.
+      - ./authentik/blueprints:/blueprints/custom:ro
+      # Custom Django settings override (USE_X_FORWARDED_HOST=True for GATE 2).
+      - ./authentik/settings/custom_settings.py:/authentik/root/custom_settings.py:ro
+      # Media volume for authentik uploads/icons (optional; prevents inode warnings)
+      - authentik-media:/media
+    depends_on:
+      authentik-postgresql:
+        condition: service_healthy
+      authentik-redis:
+        condition: service_healthy
+    networks:
+      - poc
+    # GATE 3: map public hostnames to traefik container so intra-container
+    # OIDC fetches (e.g. fetching Dex well-known) use the right IP.
+    extra_hosts:
+      - "auth.localhost:host-gateway"
+      - "idp.localhost:host-gateway"
+      - "app.localhost:host-gateway"
+    # No ports: — CONTRACT §0: only traefik publishes host ports.
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.authentik.rule: "Host(`auth.localhost`)"
+      traefik.http.routers.authentik.entrypoints: "web"
+      traefik.http.services.authentik.loadbalancer.server.port: "9000"
+      # Inject X-Forwarded-Port: 8000 so authentik builds correct issuer URLs
+      # (CONTRACT §0 single-port invariant — issuer must include :8000).
+      traefik.http.routers.authentik.middlewares: "authentik-headers@file"
+    healthcheck:
+      test: ["CMD", "ak", "healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 6
+      start_period: 120s
+
+  # ---------------------------------------------------------------------------
+  # authentik-worker — authentik background worker (Phase 1b)
+  # ---------------------------------------------------------------------------
+  # This is the process that applies blueprints on boot (CONTRACT §4).
+  # Shares the same image and env as authentik-server; runs `worker` command.
+  #
+  # DOCKER SOCKET: NOT mounted (see authentik-server note above).
+  # If outpost management is needed in a future phase, add:
+  #   volumes:
+  #     - /var/run/docker.sock:/var/run/docker.sock:ro
+  # and document it.
+  #
+  # Image pinned: ghcr.io/goauthentik/server:2024.12.3 (same as server)
+  # ---------------------------------------------------------------------------
+  authentik-worker:
+    image: ghcr.io/goauthentik/server:2024.12.3
+    restart: unless-stopped
+    command: worker
+    environment:
+      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
+      # PostgreSQL connection
+      AUTHENTIK_POSTGRESQL__HOST: authentik-postgresql
+      AUTHENTIK_POSTGRESQL__NAME: ${POSTGRES_DB}
+      AUTHENTIK_POSTGRESQL__USER: ${POSTGRES_USER}
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${POSTGRES_PASSWORD}
+      # Redis connection
+      AUTHENTIK_REDIS__HOST: authentik-redis
+      # Bootstrap admin (worker also needs these on first boot)
+      AUTHENTIK_BOOTSTRAP_PASSWORD: ${AUTHENTIK_BOOTSTRAP_PASSWORD}
+      AUTHENTIK_BOOTSTRAP_TOKEN: ${AUTHENTIK_BOOTSTRAP_TOKEN}
+      AUTHENTIK_BOOTSTRAP_EMAIL: ${AUTHENTIK_BOOTSTRAP_EMAIL}
+      # Operational flags
+      AUTHENTIK_DISABLE_UPDATE_CHECK: "true"
+      AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
+    volumes:
+      # Blueprints mounted read-only; worker applies them on boot.
+      - ./authentik/blueprints:/blueprints/custom:ro
+      # Media volume shared with server
+      - authentik-media:/media
+    depends_on:
+      authentik-postgresql:
+        condition: service_healthy
+      authentik-redis:
+        condition: service_healthy
+    networks:
+      - poc
+    # GATE 3: map public hostnames so Dex well-known fetch works from worker too.
+    extra_hosts:
+      - "auth.localhost:host-gateway"
+      - "idp.localhost:host-gateway"
+      - "app.localhost:host-gateway"
+    # No ports: — worker has no HTTP interface. No labels needed.
+
+  # ---------------------------------------------------------------------------
+  # api — Go REST API (Phase 2a)
+  # ---------------------------------------------------------------------------
+  # CONTRACT §2: Traefik routes Host(app.localhost) && PathPrefix(/api) → this
+  # container on port 8080. NO prefix stripping — the API serves /api/... directly.
+  #
+  # ROUTER PRIORITY NOTE for Phase 2b (spa worker):
+  #   This router uses PathPrefix(/api) which is inherently more specific than
+  #   the bare Host(app.localhost) the SPA will use. Traefik v3 picks the most
+  #   specific rule automatically (PathPrefix over Host-only). To be safe, we
+  #   set priority=10 on the api router. The SPA worker MUST set a lower priority
+  #   (e.g. priority=1) on its Host(app.localhost) router so /api/* always hits
+  #   this service. Example SPA label:
+  #     traefik.http.routers.spa.priority: "1"
+  #
+  # CORS: Not needed — SPA and API share origin app.localhost:8000 (CONTRACT §2).
+  #
+  # EXTRA_HOSTS: Mirrors the authentik services (see their comment blocks).
+  # Maps auth.localhost to host-gateway so the api container can fetch the JWKS
+  # from authentik through Traefik on the host. The container's /etc/hosts
+  # entry forces auth.localhost to resolve to the Docker host's gateway IP,
+  # bypassing the glibc *.localhost→127.0.0.1 default.
+  #
+  # Image: built from ./api (Go 1.24-alpine builder, alpine:3.21 runtime).
+  # ---------------------------------------------------------------------------
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      # CONTRACT §6 — OIDC configuration
+      OIDC_ISSUER: "http://auth.localhost:8000/application/o/app/"
+      OIDC_AUDIENCE: "poc-api"
+      # OIDC_JWKS_URL is left unset — the API discovers it from OIDC_ISSUER.
+      LISTEN_ADDR: ":8080"
+    networks:
+      - poc
+    # GATE 3 (same as authentik services): map public hostnames to the Traefik
+    # container via host-gateway so intra-container HTTP calls to auth.localhost
+    # reach Traefik rather than 127.0.0.1 (glibc *.localhost bypass).
+    extra_hosts:
+      - "auth.localhost:host-gateway"
+      - "app.localhost:host-gateway"
+      - "idp.localhost:host-gateway"
+    # No ports: — CONTRACT §0: only traefik publishes host ports.
+    labels:
+      traefik.enable: "true"
+      # Route Host(app.localhost) && PathPrefix(/api) → this container.
+      # NO prefix stripping (CONTRACT §2) — API routes start with /api/.
+      # NOTE: The router is named "poc-api" (not "api") to avoid conflicting with
+      # Traefik's internal "api@internal" service/router name.
+      traefik.http.routers.poc-api.rule: "Host(`app.localhost`) && PathPrefix(`/api`)"
+      traefik.http.routers.poc-api.entrypoints: "web"
+      # Priority 10: higher than the SPA router (spa worker must use priority=1).
+      # PathPrefix(/api) is already more specific, but explicit priority avoids
+      # any ambiguity in Traefik's rule ranking.
+      traefik.http.routers.poc-api.priority: "10"
+      traefik.http.services.poc-api.loadbalancer.server.port: "8080"
+    healthcheck:
+      # /healthz is an unauthenticated endpoint that returns 200 OK.
+      # wget --spider succeeds on 200 (exit 0). This allows Traefik to pick up
+      # the container once it's healthy (Traefik v3 Docker provider excludes
+      # unhealthy/starting containers from routing).
+      test:
+        - "CMD"
+        - "wget"
+        - "--quiet"
+        - "--tries=1"
+        - "--spider"
+        - "http://localhost:8080/healthz"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ---------------------------------------------------------------------------
+  # TODO (Phase 2b — spa worker): add `spa` service here.
+  # ---------------------------------------------------------------------------
+  # spa:
+  #   build: ./spa
+  #   labels:
+  #     traefik.enable: "true"
+  #     traefik.http.routers.spa.rule: "Host(`app.localhost`)"
+  #     traefik.http.routers.spa.entrypoints: "web"
+  #     traefik.http.routers.spa.priority: "1"   # lower than /api router
+  #     traefik.http.services.spa.loadbalancer.server.port: "80"
+  #   networks: [poc]
+  # ---------------------------------------------------------------------------
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  poc:
+    name: poc
+    driver: bridge
+    # Single shared network — CONTRACT §1.
+    # All services attach to this network; Traefik carries the public aliases.
+
+# =============================================================================
+# Volumes
+# =============================================================================
+volumes:
+  # dex-data: sqlite3 database for Dex. Survives container restart; wiped on
+  # `docker compose down -v` (intentional — clean PoC reset). CONTRACT §3.
+  dex-data:
+
+  # authentik-postgres-data: PostgreSQL data for authentik. Survives restart;
+  # wiped on `down -v`. CONTRACT §4.
+  authentik-postgres-data:
+
+  # authentik-redis-data: Redis persistence (optional; improves restart behavior).
+  # Wiped on `down -v`. CONTRACT §4.
+  authentik-redis-data:
+
+  # authentik-media: authentik media files (uploads, icons). Shared between
+  # authentik-server and authentik-worker. Wiped on `down -v`.
+  authentik-media:

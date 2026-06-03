@@ -1,0 +1,105 @@
+version: 1
+# =============================================================================
+# Blueprint: OIDC Provider + Application for the SPA/API (CONTRACT §4.2-4.4)
+#
+# Declares:
+#   - OAuth2Provider "app-provider" (public PKCE client, JWT RS256, spa-client)
+#   - Application "app" linked to the provider
+#
+# Scope mappings bound to the provider:
+#   Built-in (via !Find by managed ID):
+#     openid  → goauthentik.io/providers/oauth2/scope-openid
+#     email   → goauthentik.io/providers/oauth2/scope-email
+#     profile → goauthentik.io/providers/oauth2/scope-profile
+#     offline_access → goauthentik.io/providers/oauth2/scope-offline_access
+#   Custom (via !Find by managed ID, declared in 10-scope-mappings.yaml):
+#     groups  → goauthentik.io/providers/oauth2/poc-scope-groups
+#     api     → goauthentik.io/providers/oauth2/poc-scope-api
+#
+# Signing key: authentik's self-signed RSA certificate (created on first boot
+# by authentik, referenced via !Find by name).
+#
+# Numbered 20-* so it applies after 10-scope-mappings.yaml which it depends on.
+#
+# LOCAL/DEMO ONLY.
+# =============================================================================
+metadata:
+  name: PoC - OIDC Provider and Application
+
+entries:
+
+  # ---------------------------------------------------------------------------
+  # OAuth2 / OIDC Provider — app-provider
+  # CONTRACT §4.2:
+  #   client_type: public (PKCE, no secret)
+  #   client_id: spa-client
+  #   sub_mode: hashed_user_id (stable per brokered Dex user)
+  #   issuer_mode: per_provider → issuer = http://auth.localhost:8000/application/o/app/
+  #   access token: JWT signed RS256 (signing_key set to self-signed cert)
+  #   redirect_uris: strict match for each URI (authentik 2024.x list-of-objects format)
+  # ---------------------------------------------------------------------------
+  - model: authentik_providers_oauth2.oauth2provider
+    identifiers:
+      name: app-provider
+    id: app-provider
+    attrs:
+      name: app-provider
+      client_type: "public"
+      client_id: "spa-client"
+      # No client_secret for public clients.
+
+      # Flows — use authentik defaults (created by default blueprints on first boot)
+      authorization_flow: !Find [authentik_flows.flow, [slug, "default-provider-authorization-implicit-consent"]]
+      authentication_flow: !Find [authentik_flows.flow, [slug, "default-authentication-flow"]]
+      invalidation_flow: !Find [authentik_flows.flow, [slug, "default-provider-invalidation-flow"]]
+
+      # Redirect URIs — list-of-objects format required by authentik 2024.x
+      redirect_uris:
+        - matching_mode: "strict"
+          url: "http://app.localhost:8000/callback"
+        - matching_mode: "strict"
+          url: "http://app.localhost:8000/silent-renew"
+
+      # Issuer per-provider → issuer = http://auth.localhost:8000/application/o/app/
+      issuer_mode: "per_provider"
+
+      # Stable opaque sub per brokered user (hash of user ID)
+      sub_mode: "hashed_user_id"
+
+      # JWT access token signed RS256 — must reference the self-signed cert
+      # authentik creates "authentik Self-signed Certificate" on first boot.
+      signing_key: !Find [authentik_crypto.certificatekeypair, [name, "authentik Self-signed Certificate"]]
+
+      # Scope mappings bound to this provider (built-in + custom)
+      property_mappings:
+        # Built-in scope mappings (managed IDs guaranteed by authentik)
+        - !Find [authentik_providers_oauth2.scopemapping, [managed, "goauthentik.io/providers/oauth2/scope-openid"]]
+        - !Find [authentik_providers_oauth2.scopemapping, [managed, "goauthentik.io/providers/oauth2/scope-email"]]
+        - !Find [authentik_providers_oauth2.scopemapping, [managed, "goauthentik.io/providers/oauth2/scope-profile"]]
+        - !Find [authentik_providers_oauth2.scopemapping, [managed, "goauthentik.io/providers/oauth2/scope-offline_access"]]
+        # Custom scope mappings declared in 10-scope-mappings.yaml
+        - !Find [authentik_providers_oauth2.scopemapping, [managed, "goauthentik.io/providers/oauth2/poc-scope-groups"]]
+        - !Find [authentik_providers_oauth2.scopemapping, [managed, "goauthentik.io/providers/oauth2/poc-scope-api"]]
+
+      # Access token validity (default 10 minutes; explicit for clarity)
+      access_token_validity: "minutes=10"
+      refresh_token_validity: "days=30"
+
+      # Include claims in id_token too (for oidc-client-ts compatibility)
+      include_claims_in_id_token: true
+
+  # ---------------------------------------------------------------------------
+  # Application — app
+  # CONTRACT §4.4: slug "app", linked to app-provider, accessible to all.
+  # No policy binding restricting it → anyone who authenticates can access.
+  # ---------------------------------------------------------------------------
+  - model: authentik_core.application
+    identifiers:
+      slug: app
+    id: application-app
+    attrs:
+      name: "PoC App"
+      slug: "app"
+      provider: !KeyOf app-provider
+      policy_engine_mode: "any"
+      # No meta_launch_url needed for PoC; SPA handles its own routing.

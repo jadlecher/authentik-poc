@@ -1,0 +1,22 @@
+# =============================================================================
+# Traefik Dynamic Configuration — Custom headers middleware
+# =============================================================================
+# These middlewares are referenced by Traefik label on compose services.
+#
+# authentik-headers: Injects X-Forwarded-Port: 8000 and overrides the Host
+# header to include the port so authentik's build_absolute_uri() returns
+# correct issuer URLs (CONTRACT §0 / GATE 2).
+# Without this, authentik sees Host: auth.localhost (no port) and builds
+# issuer as http://auth.localhost/... instead of http://auth.localhost:8000/...
+# =============================================================================
+http:
+  middlewares:
+    authentik-headers:
+      headers:
+        customRequestHeaders:
+          # Set X-Forwarded-Host with port so Django's build_absolute_uri()
+          # returns correct issuer URL when USE_X_FORWARDED_HOST=True.
+          # Django reads X-Forwarded-Host when USE_X_FORWARDED_HOST is set.
+          X-Forwarded-Host: "auth.localhost:8000"
+          X-Forwarded-Port: "8000"
+          X-Forwarded-Proto: "http"
