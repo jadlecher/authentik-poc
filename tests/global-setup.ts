@@ -1,118 +1,28 @@
 /**
  * global-setup.ts — Playwright global setup (runs once before all tests).
  *
- * This setup performs TWO functions:
+ * This setup performs WARMUP ONLY. It does NOT mutate any authentik or Dex
+ * configuration.
  *
- * 1. BLUEPRINT GAP FIX (idempotent):
- *    The blueprint (30-sources.yaml) creates the Dex OAuth source but does NOT bind
- *    it to the `default-authentication-identification` stage's sources list.
- *    Without this binding, the authentik login page does not show a "Login with Dex"
- *    button, and users cannot broker through Dex from the standard OIDC flow.
- *    This setup adds the Dex source to the identification stage via the admin API.
- *    This is test-infrastructure setup (equivalent to seeding test fixtures into a DB),
- *    not a modification of the blueprint file or any service definition.
- *    The fix is idempotent: it checks if the source is already bound before patching.
- *    The orchestrator should fix this in the blueprint (30-sources.yaml) permanently.
- *
- * 2. WARMUP:
- *    Fetch the authentik OIDC discovery and JWKS endpoints to warm up the
- *    cold-path in-memory caches before tests run.
+ * The PoC's hard requirement is that `task dev:clean && task dev && task validate`
+ * works from a cold start with ZERO runtime config edits — every piece of identity
+ * configuration must come from the mounted authentik blueprints and the Dex config
+ * file. Earlier iterations of this file PATCHed the identification stage's source
+ * binding and PUT the Dex source's consumer_secret; both were band-aids over real
+ * bugs that are now fixed at the source:
+ *   - The Dex source ↔ identification-stage binding lives in
+ *     authentik/blueprints/30-sources.yaml.
+ *   - The Dex client secret is inlined to the CONTRACT §3 value in dex/config.yml
+ *     (Dex v2.41.1 does not expand `$DEX_CLIENT_SECRET`), matching the blueprint's
+ *     consumer_secret byte-for-byte.
+ * So this setup intentionally seeds nothing — it only warms cold caches.
  */
 
 import { FullConfig } from '@playwright/test';
 
-const AUTHENTIK_API = 'http://auth.localhost:8000/api/v3';
-const BOOTSTRAP_TOKEN = 'local-demo-bootstrap-token-0123456789';
-// Default identification stage PK (remains stable per authentik's default blueprints)
-const IDENTIFICATION_STAGE_PK = '3ebd219c-c1ee-4c43-a62b-0251cfb6bf27';
-const DEX_SOURCE_SLUG = 'dex';
-
-async function apiGet(path: string): Promise<unknown> {
-  const resp = await fetch(`${AUTHENTIK_API}${path}`, {
-    headers: { 'Authorization': `Bearer ${BOOTSTRAP_TOKEN}` },
-  });
-  if (!resp.ok) throw new Error(`GET ${path} failed: ${resp.status} ${await resp.text()}`);
-  return resp.json();
-}
-
-async function apiPatch(path: string, body: unknown): Promise<unknown> {
-  const resp = await fetch(`${AUTHENTIK_API}${path}`, {
-    method: 'PATCH',
-    headers: {
-      'Authorization': `Bearer ${BOOTSTRAP_TOKEN}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-  });
-  if (!resp.ok) {
-    const text = await resp.text();
-    throw new Error(`PATCH ${path} failed: ${resp.status} ${text}`);
-  }
-  return resp.json();
-}
-
 export default async function globalSetup(_config: FullConfig) {
-  console.log('\n[global-setup] Starting test infrastructure setup…');
+  console.log('\n[global-setup] Warming OIDC discovery + JWKS (no config mutation)…');
 
-  // ─── Step 1: Find the Dex source PK ────────────────────────────────────────
-  let dexSourcePk: string;
-  try {
-    const sourcesResp = await apiGet(`/sources/oauth/?slug=${DEX_SOURCE_SLUG}`) as {
-      results: Array<{ pk: string; slug: string }>;
-    };
-    const dexSource = sourcesResp.results.find((s) => s.slug === DEX_SOURCE_SLUG);
-    if (!dexSource) {
-      throw new Error('Dex OAuth source not found. Is the stack started and blueprints applied?');
-    }
-    dexSourcePk = dexSource.pk;
-    console.log(`[global-setup] Found Dex source PK: ${dexSourcePk}`);
-  } catch (err) {
-    console.error('[global-setup] ERROR: Cannot reach authentik API. Is the stack up?', err);
-    throw err;
-  }
-
-  // ─── Step 2: Find the identification stage PK ──────────────────────────────
-  // The default PK is hardcoded above, but let's verify it exists and find it dynamically.
-  let stagePk = IDENTIFICATION_STAGE_PK;
-  let stageSources: string[];
-  try {
-    const stage = await apiGet(`/stages/identification/${stagePk}/`) as {
-      sources: string[];
-      name: string;
-      pk: string;
-    };
-    stageSources = stage.sources;
-    console.log(`[global-setup] Stage "${stage.name}" current sources: ${JSON.stringify(stageSources)}`);
-  } catch {
-    // Fallback: find the identification stage by searching
-    console.log('[global-setup] Hardcoded stage PK not found, searching…');
-    const stagesResp = await apiGet('/stages/identification/?page=1&page_size=100') as {
-      results: Array<{ pk: string; name: string; sources: string[] }>;
-    };
-    const authStage = stagesResp.results.find((s) =>
-      s.name === 'default-authentication-identification'
-    );
-    if (!authStage) throw new Error('Could not find default-authentication-identification stage');
-    stagePk = authStage.pk;
-    stageSources = authStage.sources;
-    console.log(`[global-setup] Found stage PK dynamically: ${stagePk}`);
-  }
-
-  // ─── Step 3: Idempotent patch — add Dex source to identification stage ──────
-  if (!stageSources.includes(dexSourcePk)) {
-    console.log('[global-setup] BLUEPRINT GAP: Dex source not bound to identification stage.');
-    console.log('[global-setup] Applying fix: adding Dex source to identification stage…');
-    console.log('[global-setup] (The orchestrator should fix blueprint 30-sources.yaml to bind');
-    console.log('[global-setup]  the dex source to the identification stage permanently.)');
-    await apiPatch(`/stages/identification/${stagePk}/`, {
-      sources: [...stageSources, dexSourcePk],
-    });
-    console.log('[global-setup] Fix applied: Dex source is now a login option in authentik UI.');
-  } else {
-    console.log('[global-setup] Identification stage already has Dex source — no change needed.');
-  }
-
-  // ─── Step 4: Warm up OIDC discovery and JWKS ───────────────────────────────
   try {
     const discoveryResp = await fetch(
       'http://auth.localhost:8000/application/o/app/.well-known/openid-configuration'
@@ -121,6 +31,8 @@ export default async function globalSetup(_config: FullConfig) {
       const discovery = await discoveryResp.json() as { jwks_uri: string };
       await fetch(discovery.jwks_uri);
       console.log('[global-setup] OIDC discovery and JWKS warmed up.');
+    } else {
+      console.warn(`[global-setup] WARN: discovery returned ${discoveryResp.status}.`);
     }
   } catch (err) {
     console.warn('[global-setup] WARN: Could not warm up OIDC discovery:', err);

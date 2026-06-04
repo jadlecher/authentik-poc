@@ -1,4 +1,5 @@
 import { defineConfig, devices } from '@playwright/test';
+import path from 'path';
 
 /**
  * Playwright configuration for the authentik identity-broker PoC test suite.
@@ -24,6 +25,8 @@ import { defineConfig, devices } from '@playwright/test';
  */
 export default defineConfig({
   testDir: './tests',
+  /* Global setup: runs once before all tests to fix authentik configuration gaps */
+  globalSetup: path.resolve(__dirname, './global-setup.ts'),
   /* Global timeout per test */
   timeout: 120_000,
   /* Expect timeout for individual assertions */

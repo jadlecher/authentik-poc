@@ -11,10 +11,12 @@
 #   simpler but loses all sessions on any restart. sqlite3 is acceptable.
 #
 # SECRETS NOTE:
-#   Dex config supports $VAR expansion (via `--config` flag reads env vars).
-#   The client secret is read from DEX_CLIENT_SECRET env var at runtime.
-#   The issuer, passwords, and other non-secret values are inlined.
-#   LOCAL/DEMO ONLY — see CONTRACT §3.
+#   Dex v2.41.1 does NOT perform environment-variable expansion in this config
+#   file — a value like `$DEX_CLIENT_SECRET` is taken as a literal string, which
+#   silently breaks the authentik↔Dex token exchange (invalid_client). The
+#   client secret is therefore inlined to the exact CONTRACT §3 value. This is a
+#   documented LOCAL/DEMO secret committed to the repo, so env indirection added
+#   no real hygiene anyway. LOCAL/DEMO ONLY — see CONTRACT §3.
 #
 # APPROVAL SCREEN NOTE:
 #   skipApprovalScreen: true is set for smooth PoC UX. In production, set
@@ -59,9 +61,10 @@ enablePasswordDB: true
 # ---------------------------------------------------------------------------
 staticClients:
   - id: authentik
-    # SECRET NOTE: read from env var for slightly better hygiene even in PoC.
-    # Value is authentik-dex-secret-LOCAL-DEMO-ONLY (see .env / CONTRACT §3).
-    secret: $DEX_CLIENT_SECRET
+    # CONTRACT §3 exact value. Inlined literally because Dex does not expand
+    # env vars here (see SECRETS NOTE above). Must match authentik's
+    # consumer_secret in authentik/blueprints/30-sources.yaml byte-for-byte.
+    secret: "authentik-dex-secret-LOCAL-DEMO-ONLY"
     name: "authentik"
     redirectURIs:
       - "http://auth.localhost:8000/source/oauth/callback/dex/"

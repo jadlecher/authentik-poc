@@ -157,25 +157,20 @@ tasks:
   # Steps:
   #   1. npm ci in tests/ (idempotent; uses package-lock.json)
   #   2. Install Playwright chromium browser (skips if already installed)
-  #   3. Run test-infrastructure setup script (idempotent; fixes blueprint gap:
-  #      adds Dex source to the authentik identification stage so "Login with Dex"
-  #      button appears — see tests/scripts/setup-authentik.js for details)
-  #   4. Run Playwright tests (E2E browser flow + API negative/positive suite)
+  #   3. Run Playwright tests (E2E browser flow + API negative/positive suite)
   #
   # Tests:
   #   tests/api-negative.spec.ts — 6 API negative cases (no auth needed)
   #   tests/api-auth.spec.ts     — API positive case (requires full OIDC login)
   #   tests/e2e-login.spec.ts    — Full brokered login E2E via browser
   #
-  # Blueprint gap note (see scripts/setup-authentik.js):
-  #   Blueprint 30-sources.yaml does not bind the Dex source to the authentik
-  #   identification stage. The setup script applies this fix via the admin API.
-  #   The orchestrator should permanently fix this in the blueprint.
+  # NO runtime authentik/Dex seeding: the Dex source↔identification-stage binding
+  # lives in authentik/blueprints/30-sources.yaml and the Dex client secret is
+  # inlined in dex/config.yml, so the suite runs against a true cold start.
   # ---------------------------------------------------------------------------
   test:e2e:
-    desc: "Run Playwright E2E + API tests (Phase 4): installs deps, fixes blueprint gap, runs suite"
+    desc: "Run Playwright E2E + API tests (Phase 4): installs deps, runs suite"
     cmds:
       - cd tests && npm ci
       - cd tests && npx playwright install chromium
-      - node tests/scripts/setup-authentik.js
       - cd tests && npx playwright test

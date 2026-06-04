@@ -27,15 +27,13 @@
  * NOTE: The api-auth suite depends on the same global-setup that configures the
  * identification stage with the Dex source button.
  */
-import { test, expect, request, APIRequestContext, Page, BrowserContext } from '@playwright/test';
-import { generateKeyPair, SignJWT, exportJWK } from 'jose';
+import { test, expect, request, APIRequestContext, BrowserContext } from '@playwright/test';
+import { generateKeyPair, SignJWT } from 'jose';
+import { brokeredLogin, getAccessTokenFromPage, ALICE_EMAIL } from './login-helpers';
 
 const API_BASE = 'http://app.localhost:8000';
 const CORRECT_ISSUER = 'http://auth.localhost:8000/application/o/app/';
 const CORRECT_AUDIENCE = 'poc-api';
-
-const ALICE_EMAIL = 'alice@example.com';
-const ALICE_PASSWORD = 'password';
 
 // ============================================================================
 // Helpers
@@ -113,73 +111,14 @@ async function makeForgedJwt(overrides: {
 
 /**
  * Complete the full OIDC login flow as alice and return the access token.
- * This is identical to the E2E test flow; we reuse it here to get a real token.
+ * Reuses the single shared, reliable login helper (see login-helpers.ts) so the
+ * positive case is no longer a flaky second re-implementation of the flow.
  */
 async function getAliceAccessToken(context: BrowserContext): Promise<string> {
   const page = await context.newPage();
   try {
-    await page.goto('http://app.localhost:8000/');
-    await page.waitForTimeout(2_000);
-
-    // Click Login
-    await page.locator('button.primary', { hasText: 'Login' }).click();
-    await page.waitForURL(/auth\.localhost/, { timeout: 30_000 });
-
-    // Click Dex source button (added by global-setup)
-    const dexButton = page.locator('a[href*="source/oauth/login/dex"]');
-    await expect(dexButton).toBeVisible({ timeout: 30_000 });
-    await dexButton.click();
-
-    // Dex login: may show connector selector first
-    await page.waitForURL(/idp\.localhost/, { timeout: 30_000 });
-    const emailConnectorBtn = page.locator('a[href*="dex/auth/local"]');
-    if (await emailConnectorBtn.isVisible({ timeout: 3_000 }).catch(() => false)) {
-      await emailConnectorBtn.click();
-    }
-    await expect(page.locator('input[name="login"]')).toBeVisible({ timeout: 15_000 });
-    await page.locator('input[name="login"]').fill(ALICE_EMAIL);
-    await page.locator('input[name="password"]').fill(ALICE_PASSWORD);
-    await page.locator('button[type="submit"]').click();
-
-    // Handle authentik consent/enrollment steps
-    await page.waitForURL(/auth\.localhost|app\.localhost/, { timeout: 60_000 });
-    let attempts = 0;
-    while (page.url().includes('auth.localhost') && attempts < 5) {
-      await page.waitForTimeout(2_000);
-      const proceedBtn = page.locator('button:has-text("Proceed"), button:has-text("Continue"), button[type="submit"]');
-      if (page.url().includes('auth.localhost') && await proceedBtn.isVisible({ timeout: 3_000 }).catch(() => false)) {
-        await proceedBtn.click();
-      }
-      if (page.url().includes('app.localhost')) break;
-      try { await page.waitForURL(/app\.localhost/, { timeout: 5_000 }); break; } catch { /* continue */ }
-      attempts++;
-    }
-
-    // Wait for SPA to process /callback and settle at /
-    await page.waitForURL('http://app.localhost:8000/', { timeout: 60_000 });
-
-    // Wait for the authenticated UI to render
-    await expect(page.locator('h2', { hasText: 'Identity (from ID token)' })).toBeVisible({ timeout: 30_000 });
-
-    // Extract the access token from sessionStorage.
-    // oidc-client-ts uses a key pattern like "oidc.user:<authority>:<client_id>"
-    const token = await page.evaluate((): string | null => {
-      const authority = 'http://auth.localhost:8000/application/o/app/';
-      const clientId = 'spa-client';
-      const key = `oidc.user:${authority}:${clientId}`;
-      const raw = sessionStorage.getItem(key);
-      if (!raw) return null;
-      try {
-        const parsed = JSON.parse(raw) as { access_token?: string };
-        return parsed.access_token ?? null;
-      } catch {
-        return null;
-      }
-    });
-
-    if (!token) {
-      throw new Error('Could not extract access token from sessionStorage after login');
-    }
+    await brokeredLogin(page);
+    const token = await getAccessTokenFromPage(page);
     console.log('[api-auth] Alice access token obtained (first 30 chars):', token.substring(0, 30) + '…');
     return token;
   } finally {
