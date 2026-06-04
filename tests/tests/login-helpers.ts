@@ -53,42 +53,43 @@ export async function completeDexLogin(
   await page.locator('button[type="submit"]').click();
 }
 
+/** The h2 that only renders once the SPA is fully authenticated. */
+export function authenticatedMarker(page: Page) {
+  return page.locator('h2', { hasText: 'Identity (from ID token)' });
+}
+
 /**
- * Click through any authentik consent/enrollment pages after Dex login until we
- * land back on app.localhost. The primary submit ("Continue") lives in the shadow
- * DOM of the consent web component; .first() avoids strict-mode multi-match.
+ * After Dex login, drive authentik's post-login pages until the SPA's
+ * authenticated UI renders. This is intentionally URL-agnostic and stage-count
+ * agnostic: it polls for the authenticated marker and, whenever the browser is
+ * sitting on an authentik page with a primary submit button (an enrollment or
+ * consent "Continue"), clicks it. This makes the helper robust to the asymmetry
+ * between the first-login ENROLLMENT path (more stages) and the returning-user
+ * AUTHENTICATION path (fewer stages), and to the exact /callback→/ timing — the
+ * earlier exact-URL wait was flaky precisely because those differ.
  */
-export async function handleAuthentikIntermediatePages(page: Page, maxAttempts = 8): Promise<void> {
-  let attempts = 0;
-  while (attempts < maxAttempts) {
-    const currentUrl = page.url();
-    if (currentUrl.includes('app.localhost')) return;
-    if (!currentUrl.includes('auth.localhost')) return;
+export async function completeLoginUntilAuthenticated(page: Page, timeoutMs = 120_000): Promise<void> {
+  const marker = authenticatedMarker(page);
+  const deadline = Date.now() + timeoutMs;
 
-    await page.waitForTimeout(1_500);
+  while (Date.now() < deadline) {
+    if (await marker.isVisible().catch(() => false)) return; // SPA authenticated — done.
 
-    const primarySubmitBtn = page.locator(
-      'button[type="submit"].pf-m-primary, button[type="submit"]:not(.pf-m-plain)',
-    ).first();
-
-    const isVisible = await primarySubmitBtn.isVisible({ timeout: 3_000 }).catch(() => false);
-    if (isVisible) {
-      const btnText = await primarySubmitBtn.textContent().catch(() => '');
-      console.log(`[login] Clicking intermediate page button: "${btnText?.trim()}" (attempt ${attempts + 1})`);
-      await primarySubmitBtn.click();
-      await page.waitForTimeout(2_000);
-    } else {
-      await page.waitForTimeout(2_000);
+    if (page.url().includes('auth.localhost')) {
+      const primarySubmitBtn = page.locator(
+        'button[type="submit"].pf-m-primary, button[type="submit"]:not(.pf-m-plain)',
+      ).first();
+      if (await primarySubmitBtn.isVisible({ timeout: 2_000 }).catch(() => false)) {
+        const btnText = await primarySubmitBtn.textContent().catch(() => '');
+        console.log(`[login] Clicking authentik submit: "${btnText?.trim()}"`);
+        await primarySubmitBtn.click().catch(() => { /* navigation may race the click */ });
+      }
     }
-
-    try {
-      await page.waitForURL(/app\.localhost/, { timeout: 5_000 });
-      return;
-    } catch {
-      /* not redirected yet — continue */
-    }
-    attempts++;
+    await page.waitForTimeout(1_000);
   }
+
+  // Final assertion to surface a clear error (with the marker) if we never made it.
+  await expect(marker, 'SPA never reached authenticated state').toBeVisible({ timeout: 5_000 });
 }
 
 /**
@@ -112,11 +113,7 @@ export async function brokeredLogin(
   await page.waitForURL(/idp\.localhost/, { timeout: 30_000 });
   await completeDexLogin(page, email, password);
 
-  await page.waitForURL(/auth\.localhost|app\.localhost/, { timeout: 60_000 });
-  await handleAuthentikIntermediatePages(page);
-
-  await page.waitForURL(SPA_ROOT, { timeout: 60_000 });
-  await expect(page.locator('h2', { hasText: 'Identity (from ID token)' })).toBeVisible({ timeout: 30_000 });
+  await completeLoginUntilAuthenticated(page);
 }
 
 /**

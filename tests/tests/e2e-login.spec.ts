@@ -28,70 +28,25 @@
  */
 import { test, expect } from '@playwright/test';
 import path from 'path';
-import {
-  clickDexSourceButton,
-  completeDexLogin,
-  handleAuthentikIntermediatePages,
-  ALICE_EMAIL,
-  ALICE_PASSWORD,
-} from './login-helpers';
+import { brokeredLogin, ALICE_EMAIL } from './login-helpers';
 
 test.describe('Full brokered login flow — alice@example.com', () => {
   test('logs in as alice via SPA → authentik → Dex → SPA callback', async ({ page }) => {
     // ----------------------------------------------------------------
-    // STEP 1: Navigate to the SPA
+    // STEPS 1–6: Drive the full brokered login via the shared helper.
+    //   SPA Login → authentik identification (Dex source button) → Dex login
+    //   as alice → authentik enrollment/consent → SPA /callback → / (authenticated).
+    // The helper is URL/stage-count agnostic so it handles both the first-login
+    // enrollment path and the returning-user authentication path reliably.
     // ----------------------------------------------------------------
-    await page.goto('http://app.localhost:8000/');
-    await expect(page).toHaveTitle('authentik PoC SPA');
-
-    // The unauthenticated view shows a Login button
-    const loginButton = page.locator('button.primary', { hasText: 'Login' });
-    await expect(loginButton).toBeVisible({ timeout: 10_000 });
-
-    // ----------------------------------------------------------------
-    // STEP 2: Click Login → redirected to authentik
-    // ----------------------------------------------------------------
-    await loginButton.click();
-
-    // authentik redirects to its authentication flow
-    await page.waitForURL(/auth\.localhost/, { timeout: 30_000 });
-
-    // ----------------------------------------------------------------
-    // STEP 3: authentik identification stage — click Dex source button
-    // ----------------------------------------------------------------
-    // The global-setup ensures the Dex source is bound to the identification stage
-    // and the consumer_secret matches Dex's actual secret.
-    // The button appears in the footer of the identification stage Web Component.
-    await clickDexSourceButton(page);
-
-    // ----------------------------------------------------------------
-    // STEP 4: Dex login page — enter alice's credentials
-    // ----------------------------------------------------------------
-    await page.waitForURL(/idp\.localhost/, { timeout: 30_000 });
-    await completeDexLogin(page, ALICE_EMAIL, ALICE_PASSWORD);
-
-    // ----------------------------------------------------------------
-    // STEP 5: Handle any authentik consent / enrollment steps
-    // ----------------------------------------------------------------
-    // After Dex callback, authentik runs the source authentication flow.
-    // For first-time users this includes enrollment. After that, authentik
-    // may show a consent page ("Redirecting to PoC App - Continue").
-    // We click through any intermediate pages until we land on app.localhost.
-    await page.waitForURL(/auth\.localhost|app\.localhost/, { timeout: 60_000 });
-    await handleAuthentikIntermediatePages(page);
-
-    // ----------------------------------------------------------------
-    // STEP 6: Land on SPA /callback → redirected to /
-    // ----------------------------------------------------------------
-    // oidc-client-ts processes the code at /callback and redirects to /
-    await page.waitForURL('http://app.localhost:8000/', { timeout: 60_000 });
+    await brokeredLogin(page, ALICE_EMAIL);
 
     // ----------------------------------------------------------------
     // STEP 7: Assert authenticated state
     // ----------------------------------------------------------------
     // The SPA should render AuthenticatedApp with UserProfile + ApiProfile + Todos
 
-    // 7a. Identity section from ID token
+    // 7a. Identity section from ID token (also the marker brokeredLogin waited on)
     await expect(page.locator('h2', { hasText: 'Identity (from ID token)' })).toBeVisible({ timeout: 30_000 });
 
     // 7b. alice's email is displayed
