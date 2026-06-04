@@ -10,8 +10,18 @@ version: 1
 #   because the poc network has auth.localhost, idp.localhost as Traefik
 #   network aliases — see CONTRACT §1 and GATE 3 resolution notes).
 #
-# Enrollment / authentication flows: authentik defaults so brokered Dex users
-# are created automatically on first login (CONTRACT §4.1).
+# Enrollment flow: a custom non-interactive flow (poc-source-enrollment) is
+# declared here so that first-time Dex users are auto-provisioned WITHOUT
+# being shown a username-selection prompt. The default-source-enrollment flow
+# contains an interactive prompt stage ("Please select a username") that would
+# block the brokered browser flow. Our custom flow replaces it with a hidden
+# field whose value is derived from the pending_user username (pre-populated
+# by authentik from the Dex preferred_username / email claim), making the
+# entire enrollment fully non-interactive.
+#
+# Identification stage binding: the Dex source is bound to the
+# default-authentication-identification stage so the "Login with Dex" button
+# appears on the authentik login page (CONTRACT §4.1 fix).
 #
 # Numbered 30-* (after provider; source is independent but ordered last
 # as it triggers a network fetch to Dex at apply time).
@@ -24,6 +34,125 @@ metadata:
 entries:
 
   # ---------------------------------------------------------------------------
+  # Non-interactive enrollment flow for brokered Dex users (CONTRACT §4.1)
+  #
+  # Replaces default-source-enrollment (which prompts for a username) with a
+  # silent flow: hidden username → user-write → login. The username value is
+  # set via Python expression from pending_user.username, which authentik
+  # pre-populates from the Dex preferred_username / email claim before the
+  # enrollment flow runs. This makes first-time Dex login fully non-interactive.
+  # ---------------------------------------------------------------------------
+  - model: authentik_flows.flow
+    identifiers:
+      slug: poc-source-enrollment
+    id: flow-poc-source-enrollment
+    attrs:
+      name: "PoC Dex Source Enrollment (non-interactive)"
+      slug: "poc-source-enrollment"
+      title: "Enrolling via Dex…"
+      designation: "enrollment"
+      # No MFA / policy gates needed; Dex already authenticated the user.
+      authentication: "none"
+      policy_engine_mode: "any"
+      layout: "stacked"
+      denied_action: "message_continue"
+
+  # Hidden prompt field — value set by expression to pending_user.username
+  # (authentik fills this from Dex preferred_username or email before the
+  # flow runs, so the user never sees it).
+  - model: authentik_stages_prompt.prompt
+    identifiers:
+      name: poc-source-enrollment-field-username
+    id: prompt-poc-username
+    attrs:
+      name: "poc-source-enrollment-field-username"
+      field_key: "username"
+      label: "Username"
+      type: "hidden"
+      required: true
+      # Expression: pull username from the pending_user that authentik created
+      # from the Dex OIDC claims (preferred_username → email prefix → sub).
+      initial_value: "return request.context.get('pending_user').username"
+      initial_value_expression: true
+      order: 0
+
+  # Prompt stage wrapping the hidden username field
+  - model: authentik_stages_prompt.promptstage
+    identifiers:
+      name: poc-source-enrollment-prompt
+    id: stage-poc-enrollment-prompt
+    attrs:
+      name: "poc-source-enrollment-prompt"
+      fields:
+        - !KeyOf prompt-poc-username
+      validation_policies: []
+
+  # User-write stage: create the user from the pending_user context.
+  # always_create because email_link on the source handles re-linking by email;
+  # new Dex users that do not yet exist in authentik will be created here.
+  - model: authentik_stages_user_write.userwritestage
+    identifiers:
+      name: poc-source-enrollment-write
+    id: stage-poc-enrollment-write
+    attrs:
+      name: "poc-source-enrollment-write"
+      user_creation_mode: "always_create"
+      create_users_as_inactive: false
+      user_type: "external"
+
+  # User-login stage: issue the authentik session after enrollment completes.
+  - model: authentik_stages_user_login.userloginstage
+    identifiers:
+      name: poc-source-enrollment-login
+    id: stage-poc-enrollment-login
+    attrs:
+      name: "poc-source-enrollment-login"
+      session_duration: "seconds=0"
+      remember_me_offset: "seconds=0"
+
+  # Bind the prompt stage to the enrollment flow (order 0)
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf flow-poc-source-enrollment
+      stage: !KeyOf stage-poc-enrollment-prompt
+      order: 0
+    attrs:
+      target: !KeyOf flow-poc-source-enrollment
+      stage: !KeyOf stage-poc-enrollment-prompt
+      order: 0
+      re_evaluate_policies: true
+      policy_engine_mode: "any"
+      invalid_response_action: "retry"
+
+  # Bind the user-write stage to the enrollment flow (order 1)
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf flow-poc-source-enrollment
+      stage: !KeyOf stage-poc-enrollment-write
+      order: 1
+    attrs:
+      target: !KeyOf flow-poc-source-enrollment
+      stage: !KeyOf stage-poc-enrollment-write
+      order: 1
+      re_evaluate_policies: true
+      policy_engine_mode: "any"
+      invalid_response_action: "retry"
+
+  # Bind the user-login stage to the enrollment flow (order 2)
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf flow-poc-source-enrollment
+      stage: !KeyOf stage-poc-enrollment-login
+      order: 2
+    attrs:
+      target: !KeyOf flow-poc-source-enrollment
+      stage: !KeyOf stage-poc-enrollment-login
+      order: 2
+      re_evaluate_policies: true
+      policy_engine_mode: "any"
+      invalid_response_action: "retry"
+
+  # ---------------------------------------------------------------------------
   # OAuth Source — dex
   # CONTRACT §4.1:
   #   slug: dex
@@ -32,8 +161,8 @@ entries:
   #   consumer_secret: authentik-dex-secret-LOCAL-DEMO-ONLY
   #   oidc_well_known_url: http://idp.localhost:8000/dex/.well-known/openid-configuration
   #   scopes: openid profile email
-  #   authentication_flow: default-source-authentication
-  #   enrollment_flow: default-source-enrollment
+  #   authentication_flow: default-source-authentication (non-interactive for existing users)
+  #   enrollment_flow: poc-source-enrollment (non-interactive for new Dex users)
   # ---------------------------------------------------------------------------
   - model: authentik_sources_oauth.oauthsource
     identifiers:
@@ -52,10 +181,27 @@ entries:
       oidc_well_known_url: "http://idp.localhost:8000/dex/.well-known/openid-configuration"
       # Additional scopes to request from Dex beyond the openid default.
       additional_scopes: "profile email"
-      # Flows for brokered users — use authentik defaults (auto-created on boot)
+      # Non-interactive enrollment flow declared above (replaces the default
+      # which blocks on a username-selection prompt).
       authentication_flow: !Find [authentik_flows.flow, [slug, "default-source-authentication"]]
-      enrollment_flow: !Find [authentik_flows.flow, [slug, "default-source-enrollment"]]
+      enrollment_flow: !KeyOf flow-poc-source-enrollment
       # user_matching_mode: email_link → link existing users by email address
       # (important: if akadmin has a matching email it would link; our demo
       # users are alice@example.com and bob@example.com which are distinct)
       user_matching_mode: "email_link"
+
+  # ---------------------------------------------------------------------------
+  # FIX: Bind the Dex source to default-authentication-identification stage
+  #
+  # Without this, authentik's login page shows only a username/password form
+  # and NO "Login with Dex" button — making the entire brokered OIDC browser
+  # flow impossible. This entry adds the Dex source to the stage's `sources`
+  # m2m, causing the button to appear. Idempotent: re-applying sets the same
+  # value. (CONTRACT §4 confirmed bug fix.)
+  # ---------------------------------------------------------------------------
+  - model: authentik_stages_identification.identificationstage
+    identifiers:
+      name: default-authentication-identification
+    attrs:
+      sources:
+        - !KeyOf source-dex

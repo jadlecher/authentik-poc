@@ -1,0 +1,15 @@
+{
+  "name": "authentik-poc-e2e",
+  "version": "1.0.0",
+  "description": "End-to-end and API tests for the authentik identity-broker PoC",
+  "private": true,
+  "scripts": {
+    "test": "playwright test",
+    "test:e2e": "playwright test tests/e2e",
+    "test:api": "playwright test tests/api"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.52.0",
+    "jose": "5.10.0"
+  }
+}
