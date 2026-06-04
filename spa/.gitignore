@@ -1,0 +1,10 @@
+# SPA-specific ignores — supplement root .gitignore
+# (root already covers: node_modules/, dist/, *.tsbuildinfo)
+
+# Un-ignore spa/.env — this file contains ONLY public OIDC client config
+# (authority URL, client_id, scopes). There are NO secrets: this is a public
+# PKCE client with no client_secret. Safe to commit for reproducibility.
+!.env
+
+# Generated — re-created by `npm run gen:api`
+src/api/schema.d.ts

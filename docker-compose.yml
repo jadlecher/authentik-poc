@@ -398,18 +398,41 @@ services:
       start_period: 30s
 
   # ---------------------------------------------------------------------------
-  # TODO (Phase 2b — spa worker): add `spa` service here.
+  # spa — React SPA (Phase 2b)
+  # CONTRACT §7: static build served by nginx, container port 80.
+  # Build context is the repo root so the Dockerfile can access both spa/ and
+  # api/openapi/openapi.yaml (shared OpenAPI spec for TS type generation).
+  # NO ports: mapping — Traefik routes app.localhost → this container.
+  # Priority 1 (lower than poc-api priority 10) so /api/* still routes to Go API.
   # ---------------------------------------------------------------------------
-  # spa:
-  #   build: ./spa
-  #   labels:
-  #     traefik.enable: "true"
-  #     traefik.http.routers.spa.rule: "Host(`app.localhost`)"
-  #     traefik.http.routers.spa.entrypoints: "web"
-  #     traefik.http.routers.spa.priority: "1"   # lower than /api router
-  #     traefik.http.services.spa.loadbalancer.server.port: "80"
-  #   networks: [poc]
-  # ---------------------------------------------------------------------------
+  spa:
+    build:
+      context: .
+      dockerfile: spa/Dockerfile
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.spa.rule: "Host(`app.localhost`)"
+      traefik.http.routers.spa.entrypoints: "web"
+      # Priority MUST be lower than poc-api (priority 10) so /api/* routes to
+      # the Go API, not the SPA. CONTRACT §2.
+      traefik.http.routers.spa.priority: "1"
+      traefik.http.services.spa.loadbalancer.server.port: "80"
+    networks: [poc]
+    # No ports: — Traefik is the ONLY service with host ports. CONTRACT §1.
+    healthcheck:
+      # GET / returns 200 (index.html via nginx try_files). Traefik v3 Docker
+      # provider excludes containers with non-passing healthchecks from routing.
+      test:
+        - "CMD"
+        - "wget"
+        - "--quiet"
+        - "--tries=1"
+        - "--spider"
+        - "http://127.0.0.1:80/"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
 # =============================================================================
 # Networks
