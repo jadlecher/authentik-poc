@@ -32,7 +32,6 @@ the repo for reproducibility. They must never be reused outside this local PoC.
   - `traefik`
   - `dex`
   - `authentik-postgresql`
-  - `authentik-redis`
   - `authentik-server`
   - `authentik-worker`
   - `api`
@@ -102,9 +101,9 @@ the repo for reproducibility. They must never be reused outside this local PoC.
 
 - **Images:** `ghcr.io/goauthentik/server:<latest stable>` for both `authentik-server`
   (command `server`) and `authentik-worker` (command `worker`). Pin tag; document.
-- **DB:** `authentik-postgresql` (`docker.io/library/postgres:16-alpine` or per
-  authentik's recommended version). **Cache/broker:** `authentik-redis`
-  (`docker.io/library/redis:<stable>`).
+- **DB:** `authentik-postgresql` (`docker.io/library/postgres:18-alpine`; volume mounted
+  at `/var/lib/postgresql`; clean PoC volume required after major upgrades). Redis is not
+  part of this PoC's authentik deployment on the 2026.5 image line.
 - **Env (LOCAL/DEMO):**
   - `AUTHENTIK_SECRET_KEY=local-demo-secret-key-change-me-please-0123456789abcdef`
   - `AUTHENTIK_BOOTSTRAP_PASSWORD=akadmin-local-demo-password` (break-glass admin)

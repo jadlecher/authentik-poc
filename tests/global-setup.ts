@@ -13,7 +13,7 @@
  *   - The Dex source ↔ identification-stage binding lives in
  *     authentik/blueprints/30-sources.yaml.
  *   - The Dex client secret is inlined to the CONTRACT §3 value in dex/config.yml
- *     (Dex v2.41.1 does not expand `$DEX_CLIENT_SECRET`), matching the blueprint's
+ *     (Dex does not expand `$DEX_CLIENT_SECRET`), matching the blueprint's
  *     consumer_secret byte-for-byte.
  * So this setup intentionally seeds nothing — it only warms cold caches.
  */

@@ -11,7 +11,7 @@
 #   simpler but loses all sessions on any restart. sqlite3 is acceptable.
 #
 # SECRETS NOTE:
-#   Dex v2.41.1 does NOT perform environment-variable expansion in this config
+#   Dex does NOT perform environment-variable expansion in this config
 #   file — a value like `$DEX_CLIENT_SECRET` is taken as a literal string, which
 #   silently breaks the authentik↔Dex token exchange (invalid_client). The
 #   client secret is therefore inlined to the exact CONTRACT §3 value. This is a

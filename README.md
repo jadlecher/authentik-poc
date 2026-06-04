@@ -119,13 +119,14 @@ in `dex/config.yml` — though the value is still public for this PoC.
 
 | Image                              | Version      | Notes                        |
 |------------------------------------|--------------|------------------------------|
-| `traefik`                          | `v3.3.5`     | Traefik v3 stable (pinned; bump to v3.7+ when testing on newer host) |
-| `ghcr.io/dexidp/dex`              | `v2.41.1`    | Dex stable; pinned Phase 1a  |
-| `ghcr.io/goauthentik/server`      | `2024.12.3`  | authentik stable; pinned Phase 1b |
-| `docker.io/library/postgres`       | `16-alpine`  | PostgreSQL 16; pinned Phase 1b |
-| `docker.io/library/redis`          | `7-alpine`   | Redis 7; pinned Phase 1b     |
+| `traefik`                          | `v3.7.1`     | Traefik v3 stable; pinned    |
+| `ghcr.io/dexidp/dex`               | `v2.45.1`    | Dex stable; pinned Phase 1a  |
+| `ghcr.io/goauthentik/server`       | `2026.5.2`   | authentik stable; pinned Phase 1b |
+| `docker.io/library/postgres`       | `18-alpine`  | PostgreSQL 18; volume mounted at `/var/lib/postgresql`; clean PoC volume required after major upgrade |
 | `golang` (build stage)             | `1.26-alpine` | Go 1.26 Alpine; Go API builder Phase 2a |
-| `alpine` (runtime stage)           | `3.21`       | Minimal runtime; Go API Phase 2a |
+| `alpine` (runtime stage)           | `3.23`       | Minimal runtime; Go API Phase 2a |
+| `node` (build stage)               | `24-alpine`  | Node 24 LTS Alpine; SPA builder Phase 2b |
+| `nginx` (runtime stage)            | `1.30-alpine` | NGINX stable Alpine; SPA runtime Phase 2b |
 
 ---
 
@@ -135,9 +136,11 @@ in `dex/config.yml` — though the value is still public for this PoC.
 
 | Component         | Image                                | Version    |
 |-------------------|--------------------------------------|------------|
-| Server + Worker   | `ghcr.io/goauthentik/server`         | `2024.12.3` |
-| Database          | `docker.io/library/postgres`         | `16-alpine` |
-| Cache/broker      | `docker.io/library/redis`            | `7-alpine`  |
+| Server + Worker   | `ghcr.io/goauthentik/server`         | `2026.5.2` |
+| Database          | `docker.io/library/postgres`         | `18-alpine` |
+
+Redis is no longer part of this PoC's authentik deployment. The service was removed to align
+with authentik 2026.5's current Docker Compose shape.
 
 ### OIDC URLs (all on `:8000`)
 

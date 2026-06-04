@@ -6,7 +6,7 @@
  * earlier duplicate, slightly-different inline copy in api-auth.spec.ts was flaky;
  * consolidating on this single code path removes that flakiness.
  *
- * Selectors (discovered by driving real browsers against authentik 2024.12.3):
+ * Selectors (discovered by driving real browsers against authentik):
  *   - Identification stage renders as <ak-stage-identification> in shadow DOM;
  *     Playwright pierces shadow DOM for role/text locators.
  *   - Dex source button: <button type="button"> with <img alt="Dex"> (icon-only).

@@ -1,9 +1,9 @@
 # =============================================================================
 # authentik-poc — Go API
-# Multi-stage build: compile with golang:1.24-alpine, run on alpine:3.21.
+# Multi-stage build: compile with golang:1.26-alpine, run on alpine:3.23.
 # =============================================================================
 # Stage 1: Build
-# Uses the latest stable Go (1.24.x) on Alpine for a small build image.
+# Uses the latest stable Go (1.26.x) on Alpine for a small build image.
 # =============================================================================
 # golang:1.26-alpine is the latest stable Go as of 2026-06 (matches local go 1.25+ requirement).
 # go.mod requires go 1.25.0; golang:1.26 satisfies this.
@@ -34,7 +34,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /api ./cmd/a
 # Stage 2: Runtime
 # Minimal Alpine image — no shell tools, no package manager in the hot path.
 # =============================================================================
-FROM alpine:3.21
+FROM alpine:3.23
 
 # ca-certificates: needed to make HTTPS/HTTP calls to the authentik issuer.
 # wget: used for the docker-compose healthcheck.

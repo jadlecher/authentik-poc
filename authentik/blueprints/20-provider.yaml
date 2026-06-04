@@ -30,13 +30,14 @@ entries:
 
   # ---------------------------------------------------------------------------
   # OAuth2 / OIDC Provider — app-provider
-  # CONTRACT §4.2:
-  #   client_type: public (PKCE, no secret)
-  #   client_id: spa-client
-  #   sub_mode: hashed_user_id (stable per brokered Dex user)
-  #   issuer_mode: per_provider → issuer = http://auth.localhost:8000/application/o/app/
-  #   access token: JWT signed RS256 (signing_key set to self-signed cert)
-  #   redirect_uris: strict match for each URI (authentik 2024.x list-of-objects format)
+# CONTRACT §4.2:
+#   client_type: public (PKCE, no secret)
+#   client_id: spa-client
+#   grant_types: authorization_code + refresh_token
+#   sub_mode: hashed_user_id (stable per brokered Dex user)
+#   issuer_mode: per_provider → issuer = http://auth.localhost:8000/application/o/app/
+#   access token: JWT signed RS256 (signing_key set to self-signed cert)
+#   redirect_uris: strict match for each URI (list-of-objects format)
   # ---------------------------------------------------------------------------
   - model: authentik_providers_oauth2.oauth2provider
     identifiers:
@@ -47,13 +48,16 @@ entries:
       client_type: "public"
       client_id: "spa-client"
       # No client_secret for public clients.
+      grant_types:
+        - authorization_code
+        - refresh_token
 
       # Flows — use authentik defaults (created by default blueprints on first boot)
       authorization_flow: !Find [authentik_flows.flow, [slug, "default-provider-authorization-implicit-consent"]]
       authentication_flow: !Find [authentik_flows.flow, [slug, "default-authentication-flow"]]
       invalidation_flow: !Find [authentik_flows.flow, [slug, "default-provider-invalidation-flow"]]
 
-      # Redirect URIs — list-of-objects format required by authentik 2024.x
+      # Redirect URIs — list-of-objects format.
       redirect_uris:
         - matching_mode: "strict"
           url: "http://app.localhost:8000/callback"

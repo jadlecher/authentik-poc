@@ -11,7 +11,7 @@
  *   SPA renders authenticated state with alice's profile + API data
  *
  * Selectors discovered by driving real browsers:
- *   - authentik 2024.12.3 renders the identification stage as <ak-stage-identification>
+ *   - authentik renders the identification stage as <ak-stage-identification>
  *     with a shadow DOM. Playwright pierces shadow DOM for role/text locators.
  *   - Dex source button: <button type="button"> with <img alt="Dex"> inside (icon-only).
  *     Accessible name comes from img alt → getByRole('button', { name: 'Dex' }) works.

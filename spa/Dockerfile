@@ -43,7 +43,7 @@ RUN npx openapi-typescript /openapi.yaml -o src/api/schema.d.ts
 RUN npm run build
 
 # ── Stage 2: serve ──────────────────────────────────────────────────────────
-FROM nginx:1.27-alpine
+FROM nginx:1.30-alpine
 
 # Replace the default nginx config with our SPA-aware config.
 # Path is relative to build context root (repo root, per docker-compose.yml).

@@ -11,13 +11,12 @@
 #     to Traefik without a port remap.
 #
 # Pinned image versions (update here + README when bumping):
-#   traefik:        v3.3.5  (latest stable Traefik v3 as of 2026-06)
+#   traefik:        v3.7.1  (latest stable Traefik v3 as of 2026-06)
 #   traefik/whoami: v1.10   (throwaway — REMOVED after routing was verified)
 #
 # Placeholder services will be added by later workers:
 #   Phase 1a  → dex
-#   Phase 1b  → authentik-postgresql, authentik-redis,
-#               authentik-server, authentik-worker
+#   Phase 1b  → authentik-postgresql, authentik-server, authentik-worker
 #   Phase 2a  → api
 #   Phase 2b  → spa
 # =============================================================================
@@ -31,7 +30,7 @@ services:
   # CONTRACT §2: dashboard at http://traefik.localhost:8000/ (local-only).
   # ---------------------------------------------------------------------------
   traefik:
-    image: traefik:v3.3.5
+    image: traefik:v3.7.1
     restart: unless-stopped
     command:
       # Point at our static config file; all other options live in traefik.yml.
@@ -98,10 +97,10 @@ services:
   #   - Static password DB: alice + bob with bcrypt hashes for "password"
   #   - Static OIDC client for authentik (see dex/config.yml)
   #
-  # Image pinned: ghcr.io/dexidp/dex:v2.41.1 (latest stable as of 2026-06)
+  # Image pinned: ghcr.io/dexidp/dex:v2.45.1 (latest stable as of 2026-06)
   # ---------------------------------------------------------------------------
   dex:
-    image: ghcr.io/dexidp/dex:v2.41.1
+    image: ghcr.io/dexidp/dex:v2.45.1
     restart: unless-stopped
     command: ["dex", "serve", "/etc/dex/config.yml"]
     environment:
@@ -137,20 +136,23 @@ services:
       start_period: 10s
 
   # ---------------------------------------------------------------------------
-  # authentik-postgresql — PostgreSQL 16 database for authentik (Phase 1b)
+  # authentik-postgresql — PostgreSQL 18 database for authentik (Phase 1b)
   # ---------------------------------------------------------------------------
   # CONTRACT §4: POSTGRES_DB/USER/PASSWORD from .env; named volume; no host port.
-  # Image pinned: docker.io/library/postgres:16-alpine
+  # Image pinned: docker.io/library/postgres:18-alpine
+  # NOTE: PostgreSQL 18 stores data in a major-versioned subdirectory. Mount
+  # /var/lib/postgresql, not /var/lib/postgresql/data, and use a clean PoC
+  # volume or explicit migration after major upgrades.
   # ---------------------------------------------------------------------------
   authentik-postgresql:
-    image: docker.io/library/postgres:16-alpine
+    image: docker.io/library/postgres:18-alpine
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
-      - authentik-postgres-data:/var/lib/postgresql/data
+      - authentik-postgres-data:/var/lib/postgresql
     networks:
       - poc
     # No ports: — CONTRACT §0: only traefik publishes host ports.
@@ -160,27 +162,6 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
-
-  # ---------------------------------------------------------------------------
-  # authentik-redis — Redis cache/broker for authentik (Phase 1b)
-  # ---------------------------------------------------------------------------
-  # Image pinned: docker.io/library/redis:7-alpine (stable)
-  # ---------------------------------------------------------------------------
-  authentik-redis:
-    image: docker.io/library/redis:7-alpine
-    restart: unless-stopped
-    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
-    volumes:
-      - authentik-redis-data:/data
-    networks:
-      - poc
-    # No ports: — CONTRACT §0: only traefik publishes host ports.
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 5s
 
   # ---------------------------------------------------------------------------
   # authentik-server — authentik OIDC broker + UI (Phase 1b)
@@ -201,10 +182,10 @@ services:
   # docker provider). Without outposts the socket is unnecessary and a security
   # risk — omitted per CONTRACT §4 guidance.
   #
-  # Image pinned: ghcr.io/goauthentik/server:2024.12.3
+  # Image pinned: ghcr.io/goauthentik/server:2026.5.2
   # ---------------------------------------------------------------------------
   authentik-server:
-    image: ghcr.io/goauthentik/server:2024.12.3
+    image: ghcr.io/goauthentik/server:2026.5.2
     restart: unless-stopped
     command: server
     environment:
@@ -214,8 +195,6 @@ services:
       AUTHENTIK_POSTGRESQL__NAME: ${POSTGRES_DB}
       AUTHENTIK_POSTGRESQL__USER: ${POSTGRES_USER}
       AUTHENTIK_POSTGRESQL__PASSWORD: ${POSTGRES_PASSWORD}
-      # Redis connection
-      AUTHENTIK_REDIS__HOST: authentik-redis
       # Bootstrap admin (break-glass only; CONTRACT §4)
       AUTHENTIK_BOOTSTRAP_PASSWORD: ${AUTHENTIK_BOOTSTRAP_PASSWORD}
       AUTHENTIK_BOOTSTRAP_TOKEN: ${AUTHENTIK_BOOTSTRAP_TOKEN}
@@ -241,8 +220,6 @@ services:
       - authentik-media:/media
     depends_on:
       authentik-postgresql:
-        condition: service_healthy
-      authentik-redis:
         condition: service_healthy
     networks:
       - poc
@@ -280,10 +257,10 @@ services:
   #     - /var/run/docker.sock:/var/run/docker.sock:ro
   # and document it.
   #
-  # Image pinned: ghcr.io/goauthentik/server:2024.12.3 (same as server)
+  # Image pinned: ghcr.io/goauthentik/server:2026.5.2 (same as server)
   # ---------------------------------------------------------------------------
   authentik-worker:
-    image: ghcr.io/goauthentik/server:2024.12.3
+    image: ghcr.io/goauthentik/server:2026.5.2
     restart: unless-stopped
     command: worker
     environment:
@@ -293,8 +270,6 @@ services:
       AUTHENTIK_POSTGRESQL__NAME: ${POSTGRES_DB}
       AUTHENTIK_POSTGRESQL__USER: ${POSTGRES_USER}
       AUTHENTIK_POSTGRESQL__PASSWORD: ${POSTGRES_PASSWORD}
-      # Redis connection
-      AUTHENTIK_REDIS__HOST: authentik-redis
       # Bootstrap admin (worker also needs these on first boot)
       AUTHENTIK_BOOTSTRAP_PASSWORD: ${AUTHENTIK_BOOTSTRAP_PASSWORD}
       AUTHENTIK_BOOTSTRAP_TOKEN: ${AUTHENTIK_BOOTSTRAP_TOKEN}
@@ -309,8 +284,6 @@ services:
       - authentik-media:/media
     depends_on:
       authentik-postgresql:
-        condition: service_healthy
-      authentik-redis:
         condition: service_healthy
     networks:
       - poc
@@ -344,7 +317,7 @@ services:
   # entry forces auth.localhost to resolve to the Docker host's gateway IP,
   # bypassing the glibc *.localhost→127.0.0.1 default.
   #
-  # Image: built from ./api (Go 1.24-alpine builder, alpine:3.21 runtime).
+  # Image: built from ./api (Go 1.26-alpine builder, alpine:3.23 runtime).
   # ---------------------------------------------------------------------------
   api:
     build:
@@ -455,10 +428,6 @@ volumes:
   # authentik-postgres-data: PostgreSQL data for authentik. Survives restart;
   # wiped on `down -v`. CONTRACT §4.
   authentik-postgres-data:
-
-  # authentik-redis-data: Redis persistence (optional; improves restart behavior).
-  # Wiped on `down -v`. CONTRACT §4.
-  authentik-redis-data:
 
   # authentik-media: authentik media files (uploads, icons). Shared between
   # authentik-server and authentik-worker. Wiped on `down -v`.
